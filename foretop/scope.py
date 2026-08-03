@@ -4,8 +4,9 @@ A scope is a set of patterns that decide which hosts are in bounds. Two styles:
 
 * **domain** — ``example.com`` matches ``example.com`` and any subdomain of it
   (``api.example.com``, ``a.b.example.com``). This is the usual bug-bounty scope.
-* **glob** — anything containing ``*``, ``?`` or ``[`` is matched with ``fnmatch``,
-  so ``*.example.com`` matches subdomains only and ``*`` matches everything.
+* **glob** — anything containing ``*``, ``?`` or ``[``; ``*.example.com`` matches
+  subdomains only and ``*`` matches everything. Wildcards are label-scoped (they
+  don't cross dots), so ``*53.com`` matches ``3g53.com`` but not ``x.y.53.com``.
 
 Excludes are checked first and win over includes.
 
@@ -18,7 +19,7 @@ fall back to per-pattern ``fnmatch``.
 
 from __future__ import annotations
 
-import fnmatch
+import re
 from collections.abc import Iterable
 
 _GLOB_CHARS = set("*?[")
@@ -26,6 +27,24 @@ _GLOB_CHARS = set("*?[")
 
 def _is_glob(pattern: str) -> bool:
     return any(c in _GLOB_CHARS for c in pattern)
+
+
+def _glob_to_regex(pattern: str) -> "re.Pattern[str]":
+    """Compile a hostname glob so ``*`` and ``?`` stay within a single DNS label.
+
+    This is stricter than shell ``fnmatch``: a scope of ``*53.com`` matches
+    ``3g53.com`` but not ``www.299853.com``, since a wildcard shouldn't swallow
+    dots and pull in arbitrary subdomains.
+    """
+    out = []
+    for ch in pattern:
+        if ch == "*":
+            out.append("[^.]*")
+        elif ch == "?":
+            out.append("[^.]")
+        else:
+            out.append(re.escape(ch))
+    return re.compile("^" + "".join(out) + "$")
 
 
 def _suffixes(host: str) -> list[str]:
@@ -44,7 +63,7 @@ class _Matcher:
         self.match_all = False
         self.domains: dict[str, str] = {}      # plain domain -> pattern
         self.subdomains: dict[str, str] = {}   # base of '*.base' -> pattern
-        self.globs: list[str] = []             # everything else, fnmatch'd
+        self.globs: list[tuple] = []           # (compiled regex, pattern), label-anchored
 
         for raw in patterns:
             p = raw.strip().lower().rstrip(".")
@@ -57,7 +76,7 @@ class _Matcher:
             elif not _is_glob(p):
                 self.domains.setdefault(p, p)
             else:
-                self.globs.append(p)
+                self.globs.append((_glob_to_regex(p), p))
 
     def __bool__(self) -> bool:
         return bool(self.match_all or self.domains or self.subdomains or self.globs)
@@ -78,9 +97,9 @@ class _Matcher:
                 hit = self.subdomains.get(s)
                 if hit:
                     return hit
-        for g in self.globs:
-            if fnmatch.fnmatch(host, g):
-                return g
+        for rx, pat in self.globs:
+            if rx.match(host):
+                return pat
         return None
 
 
