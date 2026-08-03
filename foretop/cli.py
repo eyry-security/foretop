@@ -41,6 +41,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude", action="append", default=[], metavar="PATTERN",
         help="out-of-scope pattern; repeatable; wins over --scope",
     )
+    p.add_argument(
+        "--scope-file", metavar="FILE",
+        help="file of in-scope patterns, one per line (# comments and blanks ignored)",
+    )
+    p.add_argument(
+        "--exclude-file", metavar="FILE",
+        help="file of out-of-scope patterns, one per line",
+    )
 
     # sinks
     p.add_argument("-o", "--output", metavar="FILE", help="append JSONL records to a file")
@@ -77,12 +85,37 @@ def _build_sinks(args):
     return sinks
 
 
+def _load_patterns(path: str) -> list[str]:
+    out = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                out.append(line)
+    return out
+
+
 async def _run(args) -> int:
+    scope_patterns = list(args.scope)
+    exclude_patterns = list(args.exclude)
     try:
-        scope = Scope(args.scope, args.exclude)
+        if args.scope_file:
+            scope_patterns += _load_patterns(args.scope_file)
+        if args.exclude_file:
+            exclude_patterns += _load_patterns(args.exclude_file)
+    except OSError as exc:
+        print(f"foretop: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        scope = Scope(scope_patterns, exclude_patterns)
     except ValueError as exc:
         print(f"foretop: {exc}", file=sys.stderr)
         return 2
+
+    if not args.quiet:
+        print(f"[foretop] scope: {len(scope_patterns)} pattern(s), "
+              f"{len(exclude_patterns)} exclude(s)", file=sys.stderr)
 
     try:
         source = _build_source(args)

@@ -60,7 +60,14 @@ foretop --scope tesla.com --redis redis://127.0.0.1:6379 --queue vedette:hosts
 
 # Watch everything (firehose), stop after 500 hosts
 foretop --scope '*' --max 500
+
+# Filter the firehose against a big list of scopes (e.g. bug-bounty wildcards)
+foretop --scope-file scopes.txt --redis redis://127.0.0.1:6379 --queue purser:in
 ```
+
+`--scope-file` is built for large sets — tens of thousands of `*.domain`
+patterns are indexed by suffix, so each candidate is matched in O(labels), not
+by scanning every pattern.
 
 Then, downstream:
 
@@ -86,6 +93,8 @@ vedette --redis redis://127.0.0.1:6379 --queue vedette:hosts -o live.jsonl
 | `-s, --source <NAME>` | `certstream` | Feed to watch |
 | `--scope <PATTERN>` | – | In-scope pattern; repeatable (required) |
 | `--exclude <PATTERN>` | – | Out-of-scope pattern; repeatable |
+| `--scope-file <FILE>` | – | File of in-scope patterns, one per line (# comments ok) |
+| `--exclude-file <FILE>` | – | File of out-of-scope patterns, one per line |
 | `-o, --output <FILE>` | – | Append JSONL records to a file |
 | `--redis <URL>` | – | Push hostnames to a Redis list |
 | `--queue <KEY>` | `vedette:hosts` | Redis list key to push to |
