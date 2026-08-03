@@ -1,34 +1,155 @@
-# foretop
+# Foretop
 
-> Configurable producer of new hosts from pluggable feeds (Python).
+A pluggable live feed of new hosts for your scope. The lookout aloft of the
+[Eyry](https://eyry.io) recon suite.
 
-Part of **[Eyry](https://eyry.io)**: open-source, agentic recon and offensive security tooling for
-bug bounty hunters, red teamers, and pentesters. Foretop is the lookout: it watches for new hosts in your scope and feeds them into the pipeline.
+Foretop watches a source, keeps only the hosts inside a scope you define, and
+hands them off — to stdout, a file, or straight into a Redis queue for
+[Vedette](https://github.com/eyry-security/vedette) to probe. The first source
+is **certstream**: every TLS certificate issued by a public CA is published to
+Certificate Transparency logs, so the moment someone gets a cert for
+`new-thing.example.com` it shows up here — often before the service is fully
+live.
 
-## Status
+Source-agnostic by design. certstream is the first feed; DNS, subdomain
+enumeration, wordlists, and third-party APIs slot in behind the same interface.
 
-🚧 **Early development.** Structure and APIs will change. Star the repo to follow along, and
-see [eyry.io](https://eyry.io).
-
-## What it does
-
-- Source-agnostic producer with pluggable feeds
-- First source: certstream (Certificate Transparency logs)
-- Scope filtering; emit to a queue or to stdout as JSONL
+MIT licensed. Watch only scopes you are authorized to test.
 
 ## Install
 
-Coming soon.
+```sh
+git clone https://github.com/eyry-security/foretop
+cd foretop
+pip install -e .            # core (stdout / file output)
+pip install -e '.[redis]'   # add the Redis sink
+```
 
-## The Eyry suite
+Requires Python 3.9+.
 
-- **Vedette**: fast, multi-threaded HTTP prober (Rust)
-- **Foretop**: configurable producer of new hosts from pluggable feeds (certstream first)
-- **Purser**: Redis-backed priority queue and work distributor (hot/warm/cold/DLQ)
-- **Pinnace**: general multi-turn agent runtime with compaction, tools, and a Docker sandbox
-- **Aplomado**: AI security scanner and reviewer built on Pinnace
-- **Quarterdeck**: agent control plane, scheduler, events, IRC-style chat, and pipeline orchestration
+## The certstream feed
+
+The certstream source is a thin websocket client. It doesn't parse CT logs
+itself — it connects to a **certstream server** that does the heavy lifting and
+streams the results as JSON. The old public Calidog firehose is effectively
+dead, so run your own; it's a single binary or one `docker run`, and it's fast:
+
+```sh
+# certstream-server-rust (recommended) — serves ws://localhost:8080/
+docker run -d -p 8080:8080 ghcr.io/reloading01/certstream-server-rust:latest
+
+# or certstream-server-go
+docker run -d -p 8080:8080 0rickyy0/certstream-server-go
+```
+
+Foretop defaults to `ws://localhost:8080/`. Point it anywhere else — a remote
+server, a different port, the `/full-stream` endpoint — with `--certstream-url`.
+Both servers speak the same `certificate_update` JSON format Foretop expects.
+
+## Usage
+
+```sh
+# Stream in-scope hosts to your terminal as JSONL
+foretop --scope '*.example.com'
+
+# A whole apex plus its subdomains, minus a noisy dev wildcard, saved to a file
+foretop --scope example.com --exclude '*.dev.example.com' -o hosts.jsonl
+
+# Feed hosts straight into Vedette's Redis queue
+foretop --scope tesla.com --redis redis://127.0.0.1:6379 --queue vedette:hosts
+
+# Watch everything (firehose), stop after 500 hosts
+foretop --scope '*' --max 500
+```
+
+Then, downstream:
+
+```sh
+vedette --redis redis://127.0.0.1:6379 --queue vedette:hosts -o live.jsonl
+```
+
+### Scope
+
+`--scope` is repeatable and matches two ways:
+
+- **domain** — `example.com` matches `example.com` and any subdomain
+  (`api.example.com`, `a.b.example.com`). The usual bug-bounty scope.
+- **glob** — anything with `*`, `?`, or `[` uses shell-style matching:
+  `*.example.com` matches subdomains only, `*` matches everything.
+
+`--exclude` uses the same rules and wins over `--scope`.
+
+### Options
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-s, --source <NAME>` | `certstream` | Feed to watch |
+| `--scope <PATTERN>` | – | In-scope pattern; repeatable (required) |
+| `--exclude <PATTERN>` | – | Out-of-scope pattern; repeatable |
+| `-o, --output <FILE>` | – | Append JSONL records to a file |
+| `--redis <URL>` | – | Push hostnames to a Redis list |
+| `--queue <KEY>` | `vedette:hosts` | Redis list key to push to |
+| `--no-redis-dedup` | – | Don't keep a Redis seen-set across restarts |
+| `--max <N>` | – | Stop after N in-scope hosts |
+| `--no-wildcards` | – | Drop wildcard cert names instead of flattening them |
+| `--certstream-url <URL>` | `ws://localhost:8080/` | Certstream server websocket URL |
+| `-q, --quiet` | – | Suppress stderr progress logs |
+
+If neither `--redis` nor `-o` is given, records go to stdout.
+
+## Output
+
+One JSON object per line (JSONL):
+
+```json
+{"host":"api.example.com","source":"certstream","scope":"*.example.com","seen_at":"2026-08-03T02:14:07Z","meta":{"issuer":"Let's Encrypt","ct_log":"Google 'Argon2026'"}}
+```
+
+Only `host` flows downstream to a prober — the Redis sink pushes the bare
+hostname, which is exactly what Vedette's `BRPOP` reader expects. The rest is
+provenance that rides along in the JSONL so the feed is useful on its own.
+
+Wildcard certificate names (`*.example.com`) are flattened to their base domain
+(`example.com`) by default, since that base is a real host worth probing. Use
+`--no-wildcards` to drop them instead.
+
+## Adding a source
+
+Sources are plugins behind one small interface:
+
+```python
+from foretop.sources.base import Source
+from foretop.models import Host
+
+class MySource(Source):
+    name = "mysource"
+
+    async def candidates(self):
+        while True:
+            host = await get_next_host_somehow()
+            yield Host(host=host, source=self.name)
+```
+
+Register it in `foretop/sources/__init__.py` and it's available as
+`--source mysource`. The runner handles scope filtering, dedup, and fan-out to
+sinks for free.
+
+## Where it fits
+
+```
+Foretop (new hosts) → Purser (queue) → Vedette (probe + fingerprint) → Aplomado (AI review)
+```
+
+Foretop is the top of the funnel: it decides *what to look at* by watching for
+new hosts the moment they appear. See the suite at
+[github.com/eyry-security](https://github.com/eyry-security).
+
+## Roadmap
+
+- More sources: passive DNS, subdomain enumeration, ASN/CIDR ranges, static lists
+- Optional full-record push to Redis (JSON payload, not just the hostname)
+- Persistent on-disk dedup for long-running standalone use
 
 ## License
 
-MIT, Eyry.
+MIT © Eyry
