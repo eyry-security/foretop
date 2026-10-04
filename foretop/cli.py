@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import sys
 
 from . import __version__
@@ -11,6 +12,16 @@ from .runner import Runner
 from .scope import Scope
 from .sinks import FileSink, RedisSink, StdoutSink
 from .sources import available, get_source
+
+
+def _positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
+    return seconds
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # limits / behavior
     p.add_argument("--max", type=int, default=None, metavar="N", help="stop after N in-scope hosts")
+    p.add_argument(
+        "--duration", type=_positive_seconds, default=None, metavar="SECONDS",
+        help="stop cleanly after this many seconds, even when no hosts match",
+    )
     p.add_argument("--no-wildcards", action="store_true", help="drop wildcard cert names instead of flattening them")
     p.add_argument("--certstream-url", default=None, help="override the certstream websocket URL")
     p.add_argument("-q", "--quiet", action="store_true", help="suppress stderr progress logs")
@@ -132,7 +147,18 @@ async def _run(args) -> int:
     runner = Runner(source, scope, sinks, max_items=args.max, quiet=args.quiet)
 
     try:
-        emitted = await runner.run()
+        if args.duration is None:
+            emitted = await runner.run()
+        else:
+            try:
+                emitted = await asyncio.wait_for(runner.run(), timeout=args.duration)
+            except asyncio.TimeoutError:
+                emitted = runner.emitted
+                if not args.quiet:
+                    print(
+                        f"[foretop] reached --duration {args.duration:g}s, stopping",
+                        file=sys.stderr,
+                    )
     except KeyboardInterrupt:
         emitted = runner.emitted
     if not args.quiet:

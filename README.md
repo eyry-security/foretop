@@ -67,6 +67,9 @@ foretop --scope tesla.com --redis redis://127.0.0.1:6379 --queue vedette:hosts
 # Watch everything (firehose), stop after 500 hosts
 foretop --scope '*' --max 500
 
+# Watch a quiet scope for ten minutes, then exit cleanly
+foretop --scope '*.example.com' --duration 600
+
 # Filter the firehose against a big list of scopes (e.g. bug-bounty wildcards)
 foretop --scope-file scopes.txt --redis redis://127.0.0.1:6379 --queue purser:in
 ```
@@ -102,6 +105,7 @@ vedette --redis redis://127.0.0.1:6379 --queue vedette:hosts -o live.jsonl
 | `--queue <KEY>` | `vedette:hosts` | Redis list key to push to |
 | `--no-redis-dedup` | – | Don't keep a Redis seen-set across restarts |
 | `--max <N>` | – | Stop after N in-scope hosts |
+| `--duration <SECONDS>` | – | Stop cleanly after this many seconds, even if no hosts match |
 | `--json` | – | Print full JSONL records to stdout instead of bare hostnames |
 | `--no-wildcards` | – | Drop wildcard cert names instead of flattening them |
 | `--certstream-url <URL>` | `ws://localhost:8080/` | Certstream server websocket URL |
