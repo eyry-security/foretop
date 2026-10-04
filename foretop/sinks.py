@@ -3,8 +3,12 @@
 Three sinks, all sharing one tiny interface (:meth:`Sink.emit` /
 :meth:`Sink.close`):
 
-* :class:`StdoutSink` / :class:`FileSink` — write the full JSONL record, so the
-  feed is useful on its own (``foretop ... | jq`` or ``-o hosts.jsonl``).
+* :class:`StdoutSink` — prints bare hostnames, one per line. This is the nice
+  live feed, and exactly what ``vedette`` expects on stdin, so
+  ``foretop --scope example.com | vedette`` just works. Pass
+  ``json_output=True`` (``foretop --json``) for the full JSONL record instead.
+* :class:`FileSink` — appends the full JSONL record, so ``-o hosts.jsonl``
+  archives everything with provenance.
 * :class:`RedisSink` — push the bare hostname onto a Redis list that Vedette pops
   with ``BRPOP``. This is the wiring between the two tools.
 
@@ -28,8 +32,14 @@ class Sink(ABC):
 
 
 class StdoutSink(Sink):
+    """Bare hostnames to stdout, one per line — or full JSONL with ``--json``."""
+
+    def __init__(self, json_output: bool = False) -> None:
+        self.json_output = json_output
+
     async def emit(self, host: Host) -> None:
-        sys.stdout.write(host.to_json() + "\n")
+        line = host.to_json() if self.json_output else host.host
+        sys.stdout.write(line + "\n")
         sys.stdout.flush()
 
 

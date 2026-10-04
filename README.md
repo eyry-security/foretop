@@ -49,8 +49,11 @@ Both servers speak the same `certificate_update` JSON format Foretop expects.
 ## Usage
 
 ```sh
-# Stream in-scope hosts to your terminal as JSONL
+# Stream in-scope hosts to your terminal, one per line, as they appear
 foretop --scope '*.example.com'
+
+# Multiple scopes at once, piped straight into Vedette for probing
+foretop --scope example.com --scope example.org | vedette -o live.jsonl
 
 # A whole apex plus its subdomains, minus a noisy dev wildcard, saved to a file
 foretop --scope example.com --exclude '*.dev.example.com' -o hosts.jsonl
@@ -100,23 +103,34 @@ vedette --redis redis://127.0.0.1:6379 --queue vedette:hosts -o live.jsonl
 | `--queue <KEY>` | `vedette:hosts` | Redis list key to push to |
 | `--no-redis-dedup` | – | Don't keep a Redis seen-set across restarts |
 | `--max <N>` | – | Stop after N in-scope hosts |
+| `--json` | – | Print full JSONL records to stdout instead of bare hostnames |
 | `--no-wildcards` | – | Drop wildcard cert names instead of flattening them |
 | `--certstream-url <URL>` | `ws://localhost:8080/` | Certstream server websocket URL |
 | `-q, --quiet` | – | Suppress stderr progress logs |
 
-If neither `--redis` nor `-o` is given, records go to stdout.
+If neither `--redis` nor `-o` is given, bare hostnames go to stdout — one per
+line, exactly what `vedette` expects on stdin, so
+`foretop --scope example.com | vedette` just works.
 
 ## Output
 
-One JSON object per line (JSONL):
+Stdout prints the bare hostname, one per line:
+
+```
+api.example.com
+cdn.example.com
+```
+
+Pass `--json` for the full record (JSONL) with provenance:
 
 ```json
 {"host":"api.example.com","source":"certstream","scope":"*.example.com","seen_at":"2026-08-03T02:14:07Z","meta":{"issuer":"Let's Encrypt","ct_log":"Google 'Argon2026'"}}
 ```
 
 Only `host` flows downstream to a prober — the Redis sink pushes the bare
-hostname, which is exactly what Vedette's `BRPOP` reader expects. The rest is
-provenance that rides along in the JSONL so the feed is useful on its own.
+hostname, which is exactly what Vedette's `BRPOP` reader expects. The JSON
+record keeps the provenance for when the feed is useful on its own
+(`foretop --json ... | jq`).
 
 Wildcard certificate names (`*.example.com`) are flattened to their base domain
 (`example.com`) by default, since that base is a real host worth probing. Use

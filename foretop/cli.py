@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "examples:\n"
             "  foretop --scope '*.example.com'\n"
+            "  foretop --scope example.com --scope example.org | vedette -o live.jsonl\n"
             "  foretop --scope example.com --exclude '*.dev.example.com' -o hosts.jsonl\n"
             "  foretop --scope tesla.com --redis redis://127.0.0.1:6379 --queue vedette:hosts\n"
         ),
@@ -55,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--redis", metavar="URL", help="push hostnames to a Redis list (e.g. redis://127.0.0.1:6379)")
     p.add_argument("--queue", default="vedette:hosts", help="Redis list key to push to (default: vedette:hosts)")
     p.add_argument("--no-redis-dedup", action="store_true", help="don't keep a Redis seen-set across restarts")
+    p.add_argument(
+        "--json", action="store_true",
+        help="print full JSONL records to stdout instead of bare hostnames",
+    )
 
     # limits / behavior
     p.add_argument("--max", type=int, default=None, metavar="N", help="stop after N in-scope hosts")
@@ -81,7 +86,7 @@ def _build_sinks(args):
     if args.output:
         sinks.append(FileSink(args.output))
     if not sinks:
-        sinks.append(StdoutSink())
+        sinks.append(StdoutSink(json_output=args.json))
     return sinks
 
 
